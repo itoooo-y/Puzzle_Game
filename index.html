@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Saga: Last Bonus Edition</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+        #game-container { width: 360px; height: 580px; border: 3px solid #00f7ff; box-shadow: 0 0 40px #00f7ff; border-radius: 25px; background: #020202; overflow: hidden; }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    <script>
+        const GRID_SIZE = 7;
+        const TILE_SIZE = 46;
+        const OFFSET_X = 19;
+        const OFFSET_Y = 140;
+        const COLORS = [0xFF007F, 0x00E5FF, 0x39FF14, 0xFFF000, 0xBC13FE];
+        const EMOJIS = { rocketH: '↔️', rocketV: '↕️', bomb: '💣', rainbow: '🌈', plane: '✈️' };
+
+        function createGlassButton(scene, x, y, width, height, text, color = 0x00f7ff) {
+            let container = scene.add.container(x, y);
+            let bg = scene.add.rectangle(0, 0, width, height, 0xffffff, 0.05).setStrokeStyle(2, color, 1);
+            let label = scene.add.text(0, 0, text, { fontSize: '18px', fill: '#fff', fontWeight: 'bold' }).setOrigin(0.5);
+            container.add([bg, label]);
+            bg.setInteractive({ useHandCursor: true });
+            return { bg, container };
+        }
+
+        class TitleScene extends Phaser.Scene {
+            constructor() { super('TitleScene'); }
+            create() {
+                let title = this.add.text(180, 160, 'NEON\nRINGS', { fontSize: '56px', fontWeight: '900', fill: '#fff', align: 'center' }).setOrigin(0.5);
+                title.setShadow(0, 0, '#00f7ff', 30, true, true);
+                [{lv:1, m:25, t:1500}, {lv:2, m:22, t:2200}, {lv:3, m:20, t:2800}].forEach((l, i) => {
+                    createGlassButton(this, 180, 320 + i*70, 240, 50, `LEVEL ${l.lv}`).bg.on('pointerdown', () => this.scene.start('GameScene', l));
+                });
+            }
+        }
+
+        class GameScene extends Phaser.Scene {
+            constructor() { super('GameScene'); }
+            init(data) { this.lv = data; this.moves = data.m; this.score = 0; this.isProcessing = false; this.isFinishing = false; }
+
+            preload() {
+                COLORS.forEach((color, i) => {
+                    let g = this.make.graphics({ x: 0, y: 0, add: false });
+                    const cx = TILE_SIZE/2, cy = TILE_SIZE/2, r = TILE_SIZE/2 - 8;
+                    for (let j = 0; j < 6; j++) { g.lineStyle(12-j, color, 0.15); g.strokeCircle(cx, cy, r+2); }
+                    g.lineStyle(4, color, 0.8); g.strokeCircle(cx, cy, r);
+                    g.lineStyle(2, 0xffffff, 1); g.strokeCircle(cx, cy, r);
+                    g.generateTexture('j' + i, TILE_SIZE, TILE_SIZE);
+                });
+                let bgG = this.make.graphics({ x: 0, y: 0, add: false });
+                bgG.fillStyle(0x0a0a0a, 1); bgG.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
+                bgG.lineStyle(1, 0x1a1a1a, 1); bgG.strokeRect(0, 0, TILE_SIZE, TILE_SIZE);
+                bgG.generateTexture('tile_bg', TILE_SIZE, TILE_SIZE);
+            }
+
+            create() {
+                for(let y=0; y<GRID_SIZE; y++) for(let x=0; x<GRID_SIZE; x++) this.add.image(x*TILE_SIZE+OFFSET_X+TILE_SIZE/2, y*TILE_SIZE+OFFSET_Y+TILE_SIZE/2, 'tile_bg');
+                this.scoreText = this.add.text(25, 55, `0 / ${this.lv.t}`, { fontSize: '26px', fill: '#fff', fontWeight: '900' });
+                this.uiM = this.add.text(335, 55, `${this.moves}`, { fontSize: '36px', fill: '#fff', fontWeight: '900' }).setOrigin(1, 0.5);
+                createGlassButton(this, 305, 110, 70, 30, 'QUIT').bg.on('pointerdown', () => this.scene.start('TitleScene'));
+                this.grid = []; this.initBoard();
+                this.input.on('pointerdown', this.handleDown, this);
+                this.input.on('pointerup', this.handleUp, this);
+            }
+
+            initBoard() {
+                for (let y = 0; y < GRID_SIZE; y++) {
+                    this.grid[y] = [];
+                    for (let x = 0; x < GRID_SIZE; x++) {
+                        let c; do { c = Math.floor(Math.random() * COLORS.length); } while (this.isMatchAt(x, y, c));
+                        this.grid[y][x] = this.spawnJewel(x, y, c);
+                    }
+                }
+            }
+
+            isMatchAt(x, y, c) {
+                if (x >= 2 && this.grid[y][x-1]?.color === c && this.grid[y][x-2]?.color === c) return true;
+                if (y >= 2 && this.grid[y-1][x]?.color === c && this.grid[y-2][x]?.color === c) return true;
+                return false;
+            }
+
+            spawnJewel(x, y, c, type = 'normal') {
+                const jewel = this.add.sprite(x * TILE_SIZE + OFFSET_X + TILE_SIZE/2, y * TILE_SIZE + OFFSET_Y + TILE_SIZE/2, 'j' + c);
+                jewel.color = c; jewel.gx = x; jewel.gy = y; jewel.type = type;
+                if (type !== 'normal') {
+                    jewel.emoji = this.add.text(jewel.x, jewel.y, EMOJIS[type], { fontSize: '24px' }).setOrigin(0.5);
+                }
+                return jewel;
+            }
+
+            handleDown(p) {
+                if (this.isProcessing || this.isFinishing) return;
+                const x = Math.floor((p.x - OFFSET_X) / TILE_SIZE), y = Math.floor((p.y - OFFSET_Y) / TILE_SIZE);
+                if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return;
+                this.prevSelected = this.grid[y][x]; this.startX = p.x; this.startY = p.y;
+            }
+
+            async handleUp(p) {
+                if (this.isProcessing || !this.prevSelected || this.isFinishing) return;
+                const dx = p.x - this.startX, dy = p.y - this.startY, threshold = 20;
+                let tx = this.prevSelected.gx, ty = this.prevSelected.gy, dir = '';
+                if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) { tx += dx > 0 ? 1 : -1; dir = 'h'; }
+                else if (Math.abs(dy) > threshold) { ty += dy > 0 ? 1 : -1; dir = 'v'; }
+                else return;
+
+                if (tx >= 0 && tx < GRID_SIZE && ty >= 0 && ty < GRID_SIZE) {
+                    this.moves--; this.updateUI();
+                    await this.swap(this.prevSelected, this.grid[ty][tx], dir);
+                }
+                this.prevSelected = null;
+            }
+
+            async swap(j1, j2, dir) {
+                this.isProcessing = true;
+                const x1 = j1.gx, y1 = j1.gy, x2 = j2.gx, y2 = j2.gy;
+                
+                if (j1.type !== 'normal' && j2.type !== 'normal') {
+                    await this.animateMove(j1, x2, y2);
+                    await this.handleCombo(j1, j2, dir, x2, y2);
+                    await this.cascade();
+                } else {
+                    await Promise.all([this.animateMove(j1, x2, y2), this.animateMove(j2, x1, y1)]);
+                    this.grid[y1][x1] = j2; this.grid[y2][x2] = j1;
+                    j1.gx = x2; j1.gy = y2; j2.gx = x1; j2.gy = y1;
+
+                    if (j1.type !== 'normal' || j2.type !== 'normal') {
+                        const item = j1.type !== 'normal' ? j1 : j2;
+                        await this.activateItem(item, item.gx, item.gy);
+                        await this.cascade();
+                    } else {
+                        let matchResult = await this.processMatches(dir);
+                        if (!matchResult) {
+                            await Promise.all([this.animateMove(j1, x1, y1), this.animateMove(j2, x2, y2)]);
+                            this.grid[y1][x1] = j1; this.grid[y2][x2] = j2;
+                            j1.gx = x1; j1.gy = y1; j2.gx = x2; j2.gy = y2;
+                        } else { await this.cascade(); }
+                    }
+                }
+                this.checkEnd(); this.isProcessing = false;
+            }
+
+            async handleCombo(j1, j2, dir, tx, ty) {
+                const types = [j1.type, j2.type].sort().join('+');
+                this.destroyJewel(j1); this.destroyJewel(j2);
+                this.score += 250;
+
+                if (types.includes('rocketH') || types.includes('rocketV')) {
+                    if (types.includes('rocketH') && types.includes('rocketV') || types.match(/rocket[HV]\+rocket[HV]/)) {
+                        await this.clearRow(ty); await this.clearCol(tx);
+                    } else if (types.includes('bomb')) {
+                        for(let i=-1; i<=1; i++) { if(ty+i>=0 && ty+i<7) await this.clearRow(ty+i); if(tx+i>=0 && tx+i<7) await this.clearCol(tx+i); }
+                    } else if (types.includes('plane')) {
+                        await this.clearPlane(tx, ty, 'cross', dir);
+                    } else if (types.includes('rainbow')) {
+                        await this.multiItemSpawn(tx, ty, Math.random() > 0.5 ? 'rocketH' : 'rocketV');
+                    }
+                } else if (types === 'bomb+plane') {
+                    await this.clearPlane(tx, ty, 'bomb');
+                } else if (types === 'bomb+rainbow') {
+                    await this.multiItemSpawn(tx, ty, 'bomb');
+                } else if (types === 'plane+rainbow') {
+                    await this.multiItemSpawn(tx, ty, 'plane');
+                } else if (types === 'bomb+bomb') {
+                    const area = [[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1],[2,0],[-2,0],[0,2],[0,-2],[1,2],[-1,2],[1,-2],[-1,-2]];
+                    for(let pos of area) await this.triggerOrDestroy(tx+pos[0], ty+pos[1]);
+                } else if (types === 'rainbow+rainbow') {
+                    for(let y=0; y<GRID_SIZE; y++) for(let x=0; x<GRID_SIZE; x++) this.destroyJewel(this.grid[y][x]);
+                } else if (types === 'plane+plane') {
+                    for(let i=0; i<3; i++) await this.clearPlane(tx, ty, 'normal');
+                }
+            }
+
+            async activateItem(j, tx, ty) {
+                if (!j || j.isActivating) return;
+                j.isActivating = true;
+                this.score += 80;
+                if (j.type === 'rocketH') await this.clearRow(ty);
+                else if (j.type === 'rocketV') await this.clearCol(tx);
+                else if (j.type === 'bomb') await this.clearArea(tx, ty, 1);
+                else if (j.type === 'rainbow') await this.clearColor(j.color);
+                else if (j.type === 'plane') {
+                    const cross = [[0,0],[1,0],[-1,0],[0,1],[0,-1]];
+                    for(let p of cross) await this.triggerOrDestroy(tx+p[0], ty+p[1]);
+                    await this.clearPlane(tx, ty, 'normal');
+                }
+                this.destroyJewel(j);
+            }
+
+            async clearPlane(gx, gy, effect, dir = 'h') {
+                let targets = this.grid.flat().filter(j => j && j.type === 'normal');
+                if (targets.length > 0) {
+                    let t = targets[Math.floor(Math.random() * targets.length)];
+                    let p = this.add.text(gx*TILE_SIZE+OFFSET_X+23, gy*TILE_SIZE+OFFSET_Y+23, '✈️', {fontSize:'30px'}).setOrigin(0.5);
+                    await new Promise(r => this.tweens.add({ targets: p, x: t.x, y: t.y, duration: 450, onComplete: async () => {
+                        p.destroy();
+                        if (effect === 'bomb') await this.clearBomb(t.gx, t.gy);
+                        else if (effect === 'cross') { if(dir==='h') await this.clearRow(t.gy); else await this.clearCol(t.gx); }
+                        this.destroyJewel(t); r();
+                    }}));
+                }
+            }
+
+            async multiItemSpawn(tx, ty, type) {
+                for(let i=0; i<5; i++) {
+                    let t = this.grid.flat().filter(j => j && j.type === 'normal')[0];
+                    if(t) {
+                        let newItem = this.spawnJewel(t.gx, t.gy, t.color, type);
+                        this.destroyJewel(t); this.grid[t.gy][t.gx] = newItem;
+                        this.time.delayedCall(200, () => this.activateItem(newItem, newItem.gx, newItem.gy));
+                    }
+                }
+            }
+
+            async clearRow(y) { for (let x=0; x<GRID_SIZE; x++) await this.triggerOrDestroy(x, y); }
+            async clearCol(x) { for (let y=0; y<GRID_SIZE; y++) await this.triggerOrDestroy(x, y); }
+            async clearBomb(gx, gy) { await this.clearArea(gx, gy, 1); }
+            async clearArea(gx, gy, r) {
+                for (let y=gy-r; y<=gy+r; y++) for (let x=gx-r; x<=gx+r; x++) await this.triggerOrDestroy(x, y);
+            }
+            async clearColor(c) { 
+                let targets = this.grid.flat().filter(j => j?.color === c);
+                for(let t of targets) await this.triggerOrDestroy(t.gx, t.gy);
+            }
+
+            async triggerOrDestroy(x, y) {
+                if (x<0 || x>=GRID_SIZE || y<0 || y>=GRID_SIZE) return;
+                let j = this.grid[y][x]; if (!j) return;
+                if (j.type !== 'normal' && !j.isActivating) await this.activateItem(j, x, y);
+                else this.destroyJewel(j);
+            }
+
+            destroyJewel(j) {
+                if (!j) return; this.score += 15;
+                if (j.emoji) j.emoji.destroy(); this.grid[j.gy][j.gx] = null;
+                this.add.particles(j.x, j.y, 'j'+j.color, { speed: 150, lifespan: 400, stopAfter: 5, scale: {start:0.6, end:0}, blendMode: 'ADD' });
+                j.destroy();
+            }
+
+            async cascade() {
+                let hasChain = true;
+                while (hasChain) {
+                    await this.fillGaps();
+                    await new Promise(r => this.time.delayedCall(150, r));
+                    hasChain = await this.processMatches();
+                }
+            }
+
+            async processMatches(lastMoveDir = 'h') {
+                let result = this.scanBoard();
+                if (!result) return false;
+                let { groups, type, pivot } = result;
+                for (let j of groups) await this.triggerOrDestroy(j.gx, j.gy);
+                
+                let finalType = type;
+                if (type === 'rocket') finalType = (lastMoveDir === 'h') ? 'rocketH' : 'rocketV';
+                if (finalType !== 'normal') this.grid[pivot.gy][pivot.gx] = this.spawnJewel(pivot.gx, pivot.gy, pivot.color, finalType);
+                return true;
+            }
+
+            scanBoard() {
+                for (let y=0; y<GRID_SIZE; y++) for (let x=0; x<GRID_SIZE; x++) {
+                    if(!this.grid[y][x]) continue;
+                    let h=this.getLine(x,y,1,0), v=this.getLine(x,y,0,1);
+                    if(h.length>=5 || v.length>=5) return {groups:h.length>=5?h:v, type:'rainbow', pivot:(h.length>=5?h:v)[2]};
+                }
+                for (let y=0; y<GRID_SIZE; y++) for (let x=0; x<GRID_SIZE; x++) {
+                    if(!this.grid[y][x]) continue;
+                    let h = this.getFullLine(x, y, 1, 0), v = this.getFullLine(x, y, 0, 1);
+                    if(h.length >= 3 && v.length >= 3) return {groups:[...new Set([...h, ...v])], type:'bomb', pivot:this.grid[y][x]};
+                }
+                for (let y=0; y<GRID_SIZE; y++) for (let x=0; x<GRID_SIZE; x++) {
+                    if(!this.grid[y][x]) continue;
+                    let h=this.getLine(x,y,1,0), v=this.getLine(x,y,0,1);
+                    if(h.length===4 || v.length===4) return {groups:h.length===4?h:v, type:'rocket', pivot:(h.length===4?h:v)[1]};
+                }
+                for (let y=0; y<GRID_SIZE-1; y++) for (let x=0; x<GRID_SIZE-1; x++) {
+                    if(!this.grid[y][x]) continue;
+                    let c = this.grid[y][x].color;
+                    if(this.grid[y][x+1]?.color===c && this.grid[y+1][x]?.color===c && this.grid[y+1][x+1]?.color===c) {
+                        return {groups:[this.grid[y][x], this.grid[y][x+1], this.grid[y+1][x], this.grid[y+1][x+1]], type:'plane', pivot:this.grid[y][x]};
+                    }
+                }
+                for (let y=0; y<GRID_SIZE; y++) for (let x=0; x<GRID_SIZE; x++) {
+                    if(!this.grid[y][x]) continue;
+                    let h=this.getLine(x,y,1,0), v=this.getLine(x,y,0,1);
+                    if(h.length>=3) return {groups:h, type:'normal', pivot:null};
+                    if(v.length>=3) return {groups:v, type:'normal', pivot:null};
+                }
+                return null;
+            }
+
+            getLine(x, y, dx, dy) {
+                let l = [this.grid[y][x]], c = this.grid[y][x].color;
+                for (let i = 1; i < GRID_SIZE; i++) {
+                    let nx = x+dx*i, ny = y+dy*i;
+                    if (nx>=0 && nx<GRID_SIZE && ny>=0 && ny<GRID_SIZE && this.grid[ny][nx]?.color === c) l.push(this.grid[ny][nx]); else break;
+                }
+                return l;
+            }
+
+            getFullLine(x, y, dx, dy) {
+                let c = this.grid[y][x].color, l = [this.grid[y][x]];
+                for (let i=1; i<GRID_SIZE; i++) {
+                    let nx=x+dx*i, ny=y+dy*i;
+                    if (nx>=0 && nx<GRID_SIZE && ny>=0 && ny<GRID_SIZE && this.grid[ny][nx]?.color===c) l.push(this.grid[ny][nx]); else break;
+                }
+                for (let i=1; i<GRID_SIZE; i++) {
+                    let nx=x-dx*i, ny=y-dy*i;
+                    if (nx>=0 && nx<GRID_SIZE && ny>=0 && ny<GRID_SIZE && this.grid[ny][nx]?.color===c) l.push(this.grid[ny][nx]); else break;
+                }
+                return l;
+            }
+
+            async fillGaps() {
+                let anims = [];
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    let empty = 0;
+                    for (let y = GRID_SIZE - 1; y >= 0; y--) {
+                        if (this.grid[y][x] === null) empty++;
+                        else if (empty > 0) {
+                            let j = this.grid[y][x]; this.grid[y + empty][x] = j; this.grid[y][x] = null;
+                            j.gy = y + empty; anims.push(this.animateMove(j, x, j.gy));
+                        }
+                    }
+                    for (let i = 0; i < empty; i++) {
+                        let j = this.spawnJewel(x, i - empty, Math.floor(Math.random() * COLORS.length));
+                        j.gy = i; this.grid[i][x] = j; anims.push(this.animateMove(j, x, i));
+                    }
+                }
+                if (anims.length > 0) await Promise.all(anims);
+            }
+
+            updateUI() { this.scoreText.setText(`${this.score} / ${this.lv.t}`); this.uiM.setText(`${this.moves}`); }
+
+            async checkEnd() {
+                if (this.score >= this.lv.t && !this.isFinishing) {
+                    await this.startLastBonus();
+                } else if (this.moves <= 0 && !this.isFinishing) {
+                    this.scene.start('ResultScene', {win:false, s:this.score, lv:this.lv});
+                }
+            }
+
+            // ラストボーナス演出
+            async startLastBonus() {
+                this.isFinishing = true;
+                this.isProcessing = true;
+                
+                while (this.moves > 0) {
+                    this.moves--;
+                    this.updateUI();
+                    
+                    // ランダムな通常ピースをアイテムに変える
+                    let normals = this.grid.flat().filter(j => j && j.type === 'normal');
+                    if (normals.length > 0) {
+                        let target = normals[Math.floor(Math.random() * normals.length)];
+                        const types = ['rocketH', 'rocketV', 'bomb', 'plane'];
+                        let newType = types[Math.floor(Math.random() * types.length)];
+                        
+                        let newItem = this.spawnJewel(target.gx, target.gy, target.color, newType);
+                        this.destroyJewel(target);
+                        this.grid[newItem.gy][newItem.gx] = newItem;
+                        
+                        // ひとつずつ発動させて連鎖を楽しむ
+                        await new Promise(r => this.time.delayedCall(300, r));
+                        await this.activateItem(newItem, newItem.gx, newItem.gy);
+                        await this.cascade();
+                    }
+                }
+                
+                // すべて終わったらリザルトへ
+                this.time.delayedCall(1000, () => {
+                    this.scene.start('ResultScene', {win:true, s:this.score, lv:this.lv});
+                });
+            }
+
+            animateMove(j, x, y) {
+                return new Promise(res => {
+                    const tx = x*TILE_SIZE+OFFSET_X+23, ty = y*TILE_SIZE+OFFSET_Y+23;
+                    if (j.emoji) this.tweens.add({ targets: j.emoji, x: tx, y: ty, duration: 200 });
+                    this.tweens.add({ targets: j, x: tx, y: ty, duration: 200, ease: 'Power1', onComplete: res });
+                });
+            }
+        }
+
+        class ResultScene extends Phaser.Scene {
+            constructor() { super('ResultScene'); }
+            create(d) {
+                const title = this.add.text(180, 180, d.win ? 'LEVEL CLEAR!' : 'GAME OVER', { fontSize: '48px', fontWeight: '900', fill: '#fff' }).setOrigin(0.5).setAlpha(0);
+                title.setShadow(0, 0, d.win ? '#00f7ff' : '#ff0055', 30, true, true);
+                this.tweens.add({ targets: title, alpha: 1, scale: {start: 0.5, to: 1}, duration: 800, ease: 'Back.out' });
+
+                if (d.win) {
+                    this.add.particles(180, -20, 'j0', {
+                        x: { min: 20, max: 340 }, speedY: { min: 200, max: 400 }, speedX: { min: -50, max: 50 },
+                        scale: { start: 0.6, end: 0 }, alpha: { start: 1, end: 0 }, lifespan: 1800,
+                        gravityY: 150, frequency: 40, blendMode: 'ADD', tint: COLORS
+                    });
+                }
+
+                this.add.text(180, 260, `SCORE: ${d.s}`, { fontSize: '20px', fill: '#fff' }).setOrigin(0.5);
+                createGlassButton(this, 180, 360, 200, 50, 'RETRY', 0x00f7ff).bg.on('pointerdown', () => this.scene.start('GameScene', d.lv));
+                createGlassButton(this, 180, 430, 200, 50, 'TITLE', 0xff0055).bg.on('pointerdown', () => this.scene.start('TitleScene'));
+            }
+        }
+
+        new Phaser.Game({ type: Phaser.AUTO, width: 360, height: 580, parent: 'game-container', transparent: true, scene: [TitleScene, GameScene, ResultScene] });
+    </script>
+</body>
+</html>
